@@ -1,0 +1,7 @@
+{
+  "uuid": "window-tray@local",
+  "name": "Window Tray",
+  "description": "Minimize configured application windows to a panel tray and bring them to the current workspace when activated.",
+  "shell-version": ["50"],
+  "version": 1
+}

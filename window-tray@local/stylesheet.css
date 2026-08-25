@@ -1,0 +1,23 @@
+.window-tray-count {
+    margin-left: 4px;
+    font-size: 0.85em;
+}
+
+.window-tray-row-icon {
+    margin-right: 8px;
+}
+
+.window-tray-close-button {
+    border-radius: 99px;
+    padding: 5px;
+    margin-left: 12px;
+}
+
+.window-tray-close-button:hover,
+.window-tray-close-button:focus {
+    background-color: rgba(255, 255, 255, 0.12);
+}
+
+.window-tray-empty-label {
+    color: rgba(255, 255, 255, 0.65);
+}
