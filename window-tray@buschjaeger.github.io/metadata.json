@@ -1,0 +1,11 @@
+{
+  "uuid": "window-tray@buschjaeger.github.io",
+  "name": "Window Tray",
+  "url": "https://github.com/sbuschjaeger/gnome-window-tray",
+  "description": "Minimize configured apps to a panel tray; activating an app moves its window to the current workspace",
+  "shell-version": [
+    "50"
+  ],
+  "version": 2,
+  "version-name": "1.1"
+}
