@@ -109,7 +109,8 @@ class WindowTrayIndicator extends PanelMenu.Button {
         }
 
         const row = new PopupMenu.PopupBaseMenuItem();
-        row.add_child(this._createIcon(app));
+        const icon = this._createIcon(app);
+        row.add_child(icon);
 
         const label = new St.Label({
             text: this._windowTitle(window, app),
@@ -127,9 +128,10 @@ class WindowTrayIndicator extends PanelMenu.Button {
             child: new St.Icon({icon_name: 'window-close-symbolic', icon_size: 16}),
         });
         closeButton.connect('clicked', () => this._extension.closeWindow(window));
+        row.add_child(closeButton);
         row.connect('activate', () => this._extension.restoreWindow(window, 'tray menu'));
 
-        this._rows.set(window, {row, label, closeButton, app});
+        this._rows.set(window, {row, icon, label, closeButton, app});
         this.menu.addMenuItem(row);
         this._syncCount();
     }
@@ -143,12 +145,8 @@ class WindowTrayIndicator extends PanelMenu.Button {
         // different times, so the icon is not stable at tray-insert time.
         const title = this._windowTitle(window, entry.app);
         const icon = this._createIcon(entry.app);
-        const previous = entry.row.get_children().find(child =>
-            child !== entry.label && child !== entry.closeButton);
-        if (previous)
-            entry.row.replace_child(previous, icon);
-        else
-            entry.row.add_child(icon);
+        entry.row.replace_child(entry.icon, icon);
+        entry.icon = icon;
         entry.label.text = title;
         entry.closeButton.accessible_name = `Close ${title}`;
     }
@@ -750,5 +748,4 @@ function workspaceExists(workspace) {
     return workspace && Array.from({length: manager.n_workspaces},
         (_, index) => manager.get_workspace_by_index(index)).includes(workspace);
 }
-
 
