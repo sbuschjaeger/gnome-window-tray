@@ -260,11 +260,17 @@ export default class WindowTrayExtension {
             emitter.disconnect(signalId);
         this._signals = [];
 
+        // Cancel cleanup left over from the active instance before scheduling
+        // the final window-list restores below.  Those final restores must be
+        // allowed to run after disable(): lock/suspend disables user extensions,
+        // and cancelling them leaves the windows skip-taskbar.  On resume the
+        // new instance then considers those windows ineligible, losing the tray
+        // rows and all subsequent minimize handling for them.
+        this._cancelAll(this._cleanupTimers);
         for (const window of [...this._windowRecords.keys()])
             this._untrackWindow(window, {deferWindowListRestore: true});
 
         this._cancelAll(this._windowTimers);
-        this._cancelAll(this._cleanupTimers);
         this._configUnwatch?.();
         this._configUnwatch = null;
         this._cancel(this, '_pendingBrowserNotificationTimer');
@@ -748,4 +754,3 @@ function workspaceExists(workspace) {
     return workspace && Array.from({length: manager.n_workspaces},
         (_, index) => manager.get_workspace_by_index(index)).includes(workspace);
 }
-
