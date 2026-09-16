@@ -57,6 +57,9 @@ Wayland: log out and in. X11: `Alt+F2`, `r`, Enter.
 - [ ] Minimized window is **absent** from the overview, Alt+Tab, and the Dash.
 - [ ] Click the tray row → window moves to the current workspace, unminimizes, gains focus.
 - [ ] Switch to another workspace, click a tray row → window follows you to this workspace.
+- [ ] With dynamic workspaces enabled, minimize the last visible window on a
+  non-active workspace → that workspace disappears instead of being kept alive by
+  the hidden tray window; restoring the row brings it to the current workspace.
 - [ ] Click the × in a tray row → window closes normally (app quits if it was the last window).
 - [ ] Unconfigured app: minimize → behaves entirely normally, no tray row.
 - [ ] Window close button, `File → Quit`, `Alt+F4` → normal quit, tray row disappears, nothing left behind.
@@ -90,6 +93,9 @@ gnome-extensions enable  window-tray@buschjaeger.github.io
 ```
 
 - [ ] After 5 cycles, still exactly 3 `patched` lines per enable, no `refusing to stack` warnings, and tray behaviour unchanged.
+- [ ] Minimize two configured windows, suspend and resume (or lock and unlock):
+  both tray rows return, and restoring then minimizing either window adds its
+  row again.
 
 **Notifications**
 

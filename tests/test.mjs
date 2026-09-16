@@ -11,6 +11,7 @@
 
 import GLib from 'gi://GLib';
 
+import {trayAppsEqual} from '../window-tray@buschjaeger.github.io/config.js';
 import * as matching from '../window-tray@buschjaeger.github.io/matching.js';
 import * as patchRegistry from '../window-tray@buschjaeger.github.io/patchRegistry.js';
 import * as logging from '../window-tray@buschjaeger.github.io/logging.js';
@@ -77,6 +78,26 @@ const firefox = {name: 'Firefox', desktopIdPrefixes: ['firefox']};
 const mattermost = {name: 'Mattermost', desktopIdPrefixes: ['Mattermost']};
 const pwa = {name: 'Mattermost PWA', desktopIdPrefixes: [`chrome-${CRX_ID}-Default`]};
 const TRAY = [firefox, mattermost, pwa];
+
+// trayAppsEqual ------------------------------------------------------------
+
+check('trayAppsEqual accepts the same normalized tray configuration',
+    trayAppsEqual(TRAY, TRAY.map(config => ({
+        name: config.name,
+        desktopIdPrefixes: [...config.desktopIdPrefixes],
+    }))));
+check('trayAppsEqual ignores unrelated config metadata',
+    trayAppsEqual(
+        {trayApps: TRAY, lastFocusedApp: {appId: 'one'}}.trayApps,
+        {trayApps: TRAY, lastFocusedApp: {appId: 'two'}}.trayApps));
+check('trayAppsEqual detects a changed prefix',
+    !trayAppsEqual(TRAY, [
+        firefox,
+        mattermost,
+        {name: pwa.name, desktopIdPrefixes: ['different']},
+    ]));
+check('trayAppsEqual detects reordered apps',
+    !trayAppsEqual(TRAY, [mattermost, firefox, pwa]));
 
 check('matchApp exact', matching.matchApp(app('Mattermost.desktop'), TRAY) === mattermost);
 check('matchApp is case-insensitive', matching.matchApp(app('mattermost'), TRAY) === mattermost);

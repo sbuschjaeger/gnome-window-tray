@@ -43,6 +43,24 @@ export const DEFAULT_CONFIG = Object.freeze({
     lastFocusedApp: null,
 });
 
+/** Whether two normalized tray-app lists describe the same configuration. */
+export function trayAppsEqual(left, right) {
+    if (left === right)
+        return true;
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length)
+        return false;
+
+    return left.every((app, index) => {
+        const other = right[index];
+        const prefixes = app?.desktopIdPrefixes;
+        const otherPrefixes = other?.desktopIdPrefixes;
+        return app?.name === other?.name &&
+            Array.isArray(prefixes) && Array.isArray(otherPrefixes) &&
+            prefixes.length === otherPrefixes.length &&
+            prefixes.every((prefix, prefixIndex) => prefix === otherPrefixes[prefixIndex]);
+    });
+}
+
 export function getConfigFile() {
     return Gio.File.new_for_path(GLib.build_filenamev([
         GLib.get_user_config_dir(), CONFIG_DIRECTORY, CONFIG_FILE_NAME,

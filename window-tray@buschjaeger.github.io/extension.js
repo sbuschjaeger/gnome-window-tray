@@ -34,7 +34,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
-import {loadConfig, saveConfig, watchConfig} from './config.js';
+import {loadConfig, saveConfig, trayAppsEqual, watchConfig} from './config.js';
 import * as matching from './matching.js';
 import * as patchRegistry from './patchRegistry.js';
 import {debug, error} from './logging.js';
@@ -48,6 +48,10 @@ const DEFERRED_CLEANUP_DELAY_MS = 250;
 // A generic-browser notification is attributed to the PWA that takes focus
 // within this window.
 const BROWSER_NOTIFICATION_TIMEOUT_MS = 3000;
+// Native notification actions are resolved by the application. Remember where
+// the action was invoked long enough to move the window the app actually
+// presents, rather than guessing a window from the notification source.
+const NOTIFICATION_ACTIVATION_TIMEOUT_MS = 3000;
 
 const PANEL_ICON = new Gio.FileIcon({
     file: Gio.File.new_for_uri(import.meta.url).get_parent()
@@ -198,6 +202,8 @@ export default class WindowTrayExtension {
         this._notificationSourceSignals = new Map();
         this._pendingBrowserNotification = null;
         this._pendingBrowserNotificationTimer = 0;
+        this._pendingNotificationActivation = null;
+        this._pendingNotificationActivationTimer = 0;
         this._signals = [];
 
         debug('lifecycle', `enabled state: ${this._config.trayApps.length} tray app(s) `
@@ -275,6 +281,8 @@ export default class WindowTrayExtension {
         this._configUnwatch = null;
         this._cancel(this, '_pendingBrowserNotificationTimer');
         this._pendingBrowserNotification = null;
+        this._cancel(this, '_pendingNotificationActivationTimer');
+        this._pendingNotificationActivation = null;
 
         this._indicator?.destroy();
         this._indicator = null;
@@ -339,7 +347,16 @@ export default class WindowTrayExtension {
     // Window tracking
 
     _onConfigChanged(config) {
+        const trayAppsChanged = !trayAppsEqual(this._config.trayApps, config.trayApps);
         this._config = config;
+        if (!trayAppsChanged) {
+            // Focus bookkeeping shares config.json with the tray-app list.  Do
+            // not expose and re-hide every minimized window merely because
+            // lastFocusedApp changed: besides being unnecessary, that can make
+            // Shell rebuild overview clones during an overview/menu transition.
+            debug('config', 'configuration metadata reloaded; tray apps unchanged');
+            return;
+        }
         this._rebuildWmClassIndex();
         // Re-evaluate tracking rather than trusting stale records: a config edit
         // can add or remove the app a tracked window belongs to.
@@ -408,7 +425,13 @@ export default class WindowTrayExtension {
 
     _trackWindow(window, config) {
         const app = Shell.WindowTracker.get_default().get_window_app(window);
-        const record = {config, app, hiddenFromWindowList: false, minimized: window.minimized};
+        const record = {
+            config,
+            app,
+            hiddenFromWindowList: false,
+            stuckForTray: false,
+            minimized: window.minimized,
+        };
         this._windowRecords.set(window, record);
 
         window.connect('notify::minimized', () => this._syncWindowTrayState(window));
@@ -426,6 +449,7 @@ export default class WindowTrayExtension {
             return;
         this._windowRecords.delete(window);
         this._indicator?.removeWindow(window);
+        this._restoreWorkspaceOwnership(window, record);
         if (deferWindowListRestore)
             this._showWindowInListsWhenIdle(window, record);
         else
@@ -440,6 +464,7 @@ export default class WindowTrayExtension {
 
         if (window.minimized) {
             this._hideWindowFromLists(window, record);
+            this._releaseWorkspaceOwnership(window, record);
             this._indicator.addWindow(window, record.app);
             debug('tray', `minimized ${record.config.name}: "${windowTitle(window)}"`);
         } else if (record.hiddenFromWindowList) {
@@ -492,15 +517,53 @@ export default class WindowTrayExtension {
             }));
     }
 
+    // A minimized Meta.Window still counts as occupying its workspace. Dynamic
+    // workspaces consequently cannot disappear even after the window has been
+    // removed from Shell's window lists. Temporarily making a tray window sticky
+    // makes Shell's WorkspaceTracker ignore it. Mutter does not emit one of the
+    // workspace signals that queues a recheck for this transition, so request the
+    // recheck explicitly. Restore ordinary state before moving or exposing the
+    // window again; windows that were already sticky are left so.
+    _releaseWorkspaceOwnership(window, record) {
+        if (record.stuckForTray || window.is_on_all_workspaces?.())
+            return;
+        try {
+            window.stick();
+            record.stuckForTray = true;
+            Main.wm?._workspaceTracker?._queueCheckWorkspaces?.();
+        } catch (e) {
+            error(`could not release tray window's workspace: ${e.message}`);
+        }
+    }
+
+    _restoreWorkspaceOwnership(window, record) {
+        if (!record.stuckForTray)
+            return;
+        try {
+            window.unstick();
+            record.stuckForTray = false;
+        } catch (e) {
+            error(`could not restore tray window's workspace: ${e.message}`);
+        }
+    }
+
     // Moving a tracked window to the current workspace
 
-    _bringWindowHere(window, reason) {
+    _bringWindowHere(window, reason, requestedTarget = null) {
         const record = this._windowRecords.get(window);
         if (!record)
             return false;
 
-        const target = global.workspace_manager.get_active_workspace();
+        const pending = this._pendingNotificationActivation;
+        const target = workspaceExists(requestedTarget)
+            ? requestedTarget
+            : pending?.config === record.config && workspaceExists(pending.workspace)
+                ? pending.workspace
+                : global.workspace_manager.get_active_workspace();
         try {
+            if (pending?.config === record.config)
+                this._clearPendingNotificationActivation();
+            this._restoreWorkspaceOwnership(window, record);
             this._showWindowInLists(window, record);
             this._indicator.removeWindow(window);
             if (window.get_workspace() !== target)
@@ -597,6 +660,7 @@ export default class WindowTrayExtension {
     // Focus and last-focused-app bookkeeping
 
     _onFocusWindowChanged() {
+        this._completePendingNotificationActivation();
         this._completePendingBrowserNotification();
         this._rememberFocusedApp();
     }
@@ -661,14 +725,20 @@ export default class WindowTrayExtension {
                     if (config) {
                         debug('notification',
                             `notification from ${source.app?.get_id()} -> ${config.name}`);
-                        extension._bringAppWindowHere(source.app, config, 'notification');
+                        extension._queueNotificationActivation(config);
                     } else {
                         debug('notification',
                             `deferring generic browser source ${source.app?.get_id()}`);
                         extension._queueBrowserNotification(source);
                     }
                 }
-                return original.call(this);
+                try {
+                    return original.call(this);
+                } finally {
+                    // GNOME's source.open() and GTK action paths do this too,
+                    // but the freedesktop default-action path does not.
+                    Main.panel.closeCalendar();
+                }
             });
         if (handle) {
             handle.destroySignal = notification.connect('destroy', () => {
@@ -687,6 +757,44 @@ export default class WindowTrayExtension {
     _isGenericBrowserSource(source) {
         return matching.isGenericBrowserAppId(source?.app?.get_id?.()) &&
             this._config.trayApps.some(config => matching.isChromiumPwaConfig(config));
+    }
+
+    _queueNotificationActivation(config) {
+        this._clearPendingNotificationActivation();
+        this._pendingNotificationActivation = {
+            config,
+            workspace: global.workspace_manager.get_active_workspace(),
+        };
+        this._pendingNotificationActivationTimer = GLib.timeout_add(
+            GLib.PRIORITY_DEFAULT, NOTIFICATION_ACTIVATION_TIMEOUT_MS, () => {
+                this._pendingNotificationActivation = null;
+                this._pendingNotificationActivationTimer = 0;
+                return GLib.SOURCE_REMOVE;
+            });
+    }
+
+    _clearPendingNotificationActivation() {
+        this._pendingNotificationActivation = null;
+        this._cancel(this, '_pendingNotificationActivationTimer');
+    }
+
+    _completePendingNotificationActivation() {
+        const pending = this._pendingNotificationActivation;
+        const window = global.display.get_focus_window();
+        const record = window ? this._windowRecords.get(window) : null;
+        if (!pending || record?.config !== pending.config)
+            return;
+
+        // The application, not the notification source, has now identified the
+        // destination window. Defer until its own presentation work has settled.
+        const target = pending.workspace;
+        this._clearPendingNotificationActivation();
+        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            if (!this._enabled || !this._windowRecords.has(window))
+                return GLib.SOURCE_REMOVE;
+            this._bringWindowHere(window, 'notification action', target);
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     _queueBrowserNotification(source) {
